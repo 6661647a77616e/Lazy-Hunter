@@ -7,128 +7,161 @@ import signal
 import os
 import time
 import random
+import ipaddress
 
-# ANSI color codes
-RED = "\033[91m"
-YELLOW = "\033[93m"
-GREEN = "\033[92m"
-BLUE = "\033[94m"
-CYAN = "\033[96m"
-RESET = "\033[0m"
+# Colors
+class Color:
+    RED = "\033[91m"
+    YELLOW = "\033[93m"
+    GREEN = "\033[92m"
+    BLUE = "\033[94m"
+    CYAN = "\033[96m"
+    RESET = "\033[0m"
 
-# Hardcoded banner in green
-BANNER = f"{GREEN}"
-BANNER += "______                          ______  __             _____\n"
-BANNER += "___  / ______ __________  __    ___  / / /___  __________  /_____________\n"
-BANNER += "__  /  _  __ `/__  /_  / / /    __  /_/ /_  / / /_  __ \  __/  _ \_  ___/\n"
-BANNER += "_  /___/ /_/ /__  /_  /_/ /     _  __  / / /_/ /_  / / / /_ /  __/  /\n"
-BANNER += "/_____\__,_/ _____/\__, /      /_/ /_/  \__,_/ /_/ /_/\__/ \___//_/\n"
-BANNER += "                   /____/                                           v1.0\n"
-BANNER += "                                    LazyHunter Recon Tool Dev @iamunixtz\n"
-BANNER += f"{RESET}"
+session = requests.Session()
+cve_cache = {}
 
+# Banner
+BANNER = f"""{Color.GREEN}
+______                          ______  __             _____
+___  / ______ __________  __    ___  / / /___  __________  /_____________
+__  /  _  __ `/__  /_  / / /    __  /_/ /_  / / /_  __ \  __/  _ \_  ___/
+_  /___/ /_/ /__  /_  /_/ /     _  __  / / /_/ /_  / / / /_ /  __/  /
+/_____\__,_/ _____/\__, /      /_/ /_/  \__,_/ /_/ /_/\__/ \___//_/
+                   /____/                                           v1.0
+                                    LazyHunter Recon Tool Dev @iamunixtz
+{Color.RESET}
+"""
+
+# Helper print functions
+def info(msg):
+    print(f"{Color.YELLOW}[INFO]{Color.RESET} {msg}")
+
+def error(msg):
+    print(f"{Color.RED}[ERROR]{Color.RESET} {msg}")
+
+# CTRL+C handler
 def signal_handler(sig, frame):
-    choice = input(f"\n{YELLOW}Do you want to quit? (y/n): {RESET}")
-    if choice.lower() == 'y':
-        print(f"{RED}Exiting...{RESET}")
+    choice = input(f"\n{Color.YELLOW}Do you want to quit? (y/n): {Color.RESET}")
+    if choice.lower() == "y":
+        print(f"{Color.RED}Exiting...{Color.RESET}")
         exit(0)
 
 signal.signal(signal.SIGINT, signal_handler)
 
-# Get severity level color
-def get_severity_color(cvss_score):
-    if cvss_score is None:
-        cvss_score = 0
-    if cvss_score >= 9.0:
-        return f"{RED}[CRITICAL]{RESET}"
-    elif cvss_score >= 7.0:
-        return f"{RED}[HIGH]{RESET}"
-    elif cvss_score >= 4.0:
-        return f"{YELLOW}[MEDIUM]{RESET}"
-    else:
-        return f"{GREEN}[LOW]{RESET}"
+# Severity colors
+def get_severity_color(score):
+    if score is None:
+        score = 0
+    if score >= 9.0:
+        return f"{Color.RED}[CRITICAL]{Color.RESET}"
+    elif score >= 7.0:
+        return f"{Color.RED}[HIGH]{Color.RESET}"
+    elif score >= 4.0:
+        return f"{Color.YELLOW}[MEDIUM]{Color.RESET}"
+    return f"{Color.GREEN}[LOW]{Color.RESET}"
 
-# Fetch CVE details
+# CVE Fetcher with cache
 def fetch_cve_details(cve_id):
+    if cve_id in cve_cache:
+        return cve_cache[cve_id]
+
     url = f"https://cvedb.shodan.io/cve/{cve_id}"
-    response = requests.get(url)
-    if response.status_code == 200:
-        return response.json()
+    try:
+        r = session.get(url, timeout=5)
+        if r.status_code == 200:
+            data = r.json()
+            cve_cache[cve_id] = data
+            return data
+    except:
+        pass
+
     return {}
 
-# Log results
+# Log outputs
 def log_results(ip, data, show_cves, show_ports, show_hosts, show_cve_ports):
-    timestamp = f"{YELLOW}[INFO]{RESET}"
-    log_lines = []
+    lines = []
+    base = f"{Color.YELLOW}[INFO]{Color.RESET} {Color.BLUE}[{ip}]{Color.RESET}"
 
     if show_ports or not any([show_cves, show_hosts, show_cve_ports]):
-        if data.get("ports"):
-            ports_colored = ', '.join(f"{GREEN}{port}{RESET}" for port in data["ports"])
-            log_lines.append(f"{timestamp} {BLUE}[{ip}]{RESET} [PORTS: {GREEN}{ports_colored}{RESET}]")
+        if "ports" in data:
+            ports = ", ".join(f"{Color.GREEN}{p}{Color.RESET}" for p in data["ports"])
+            lines.append(f"{base} [PORTS: {ports}]")
 
     if show_cves or not any([show_ports, show_hosts, show_cve_ports]):
-        if data.get("vulns"):
+        if "vulns" in data:
             for cve in data["vulns"]:
-                cve_info = fetch_cve_details(cve)
-                severity = get_severity_color(cve_info.get("cvss_v3", 0))
-                cve_description = cve_info.get("summary", "No description available.")[:80]  # Short description
-                log_lines.append(f"{timestamp} {BLUE}[{ip}]{RESET} [{GREEN}{cve}{RESET}] {severity} [{GREEN}{cve_description}{RESET}]")
+                c = fetch_cve_details(cve)
+                sev = get_severity_color(c.get("cvss_v3"))
+                desc = c.get("summary", "No description.")[:80]
+                lines.append(f"{base} [{Color.GREEN}{cve}{Color.RESET}] {sev} [{Color.GREEN}{desc}{Color.RESET}]")
 
-    if show_cve_ports or not any([show_cves, show_ports, show_hosts]):
-        if data.get("vulns") and data.get("ports"):
-            ports_colored = ', '.join(f"{GREEN}{port}{RESET}" for port in data["ports"])
+    if show_cve_ports:
+        if "vulns" in data and "ports" in data:
+            ports = ", ".join(f"{Color.GREEN}{p}{Color.RESET}" for p in data["ports"])
             for cve in data["vulns"]:
-                cve_info = fetch_cve_details(cve)
-                severity = get_severity_color(cve_info.get("cvss_v3", 0))
-                cve_description = cve_info.get("summary", "No description available.")[:80]
-                log_lines.append(f"{timestamp} {BLUE}[{ip}]{RESET} [{GREEN}{cve}{RESET}] {severity} [{GREEN}{cve_description}{RESET}] [PORTS: {GREEN}{ports_colored}{RESET}]")
+                c = fetch_cve_details(cve)
+                sev = get_severity_color(c.get("cvss_v3"))
+                desc = c.get("summary", "No description.")[:80]
+                lines.append(f"{base} [{Color.GREEN}{cve}{Color.RESET}] {sev} [{Color.GREEN}{desc}{Color.RESET}] [PORTS: {ports}]")
 
-    if show_hosts or not any([show_cves, show_ports, show_cve_ports]):
-        if data.get("hostnames"):
-            hostnames_colored = ', '.join(f"{GREEN}{host}{RESET}" for host in data["hostnames"])
-            log_lines.append(f"{timestamp} {BLUE}[{ip}]{RESET} [HOSTNAMES: {GREEN}{hostnames_colored}{RESET}]")
+    if show_hosts:
+        if "hostnames" in data:
+            hosts = ", ".join(f"{Color.GREEN}{h}{Color.RESET}" for h in data["hostnames"])
+            lines.append(f"{base} [HOSTNAMES: {hosts}]")
 
-    for line in log_lines:
+    for line in lines:
         print(line)
-        time.sleep(2)  # Shorter delay for output
 
-# Process a single IP
+# Single IP handler
 def process_ip(ip, show_cves, show_ports, show_hosts, show_cve_ports):
-    url = f"https://internetdb.shodan.io/{ip}"
-    response = requests.get(url)
-    if response.status_code == 200:
-        data = response.json()
-        log_results(ip, data, show_cves, show_ports, show_hosts, show_cve_ports)
-    else:
-        print(f"{RED}[ERROR]{RESET} Failed to fetch data for {ip}")
+    try:
+        ipaddress.ip_address(ip)
+    except:
+        error(f"Invalid IP format: {ip}")
+        return
 
-# Main function
+    url = f"https://internetdb.shodan.io/{ip}"
+    try:
+        r = session.get(url, timeout=5)
+        if r.status_code == 200:
+            log_results(ip, r.json(), show_cves, show_ports, show_hosts, show_cve_ports)
+        else:
+            error(f"Shodan returned status {r.status_code}")
+    except:
+        error(f"Failed to fetch data for {ip}")
+
+# Main
 def main():
-    os.system("clear")  # Clear screen
-    print(BANNER.center(80))
+    os.system("clear")
+    print(BANNER)
+
     parser = argparse.ArgumentParser(description="LazyRecon - Automated Bug Hunting Recon Tool")
-    parser.add_argument("-f", "--file", help="File containing a list of IPs")
-    parser.add_argument("--ip", help="Single IP to scan")
-    parser.add_argument("--cves", action="store_true", help="Show CVEs")
-    parser.add_argument("--ports", action="store_true", help="Show open ports")
-    parser.add_argument("--host", action="store_true", help="Show hostnames")
-    parser.add_argument("--cve+ports", dest="cve_ports", action="store_true", help="Show CVEs with severity level and open ports")
+    parser.add_argument("-f", "--file", help="File with IP list")
+    parser.add_argument("--ip", help="Single IP")
+    parser.add_argument("--cves", action="store_true")
+    parser.add_argument("--ports", action="store_true")
+    parser.add_argument("--host", action="store_true")
+    parser.add_argument("--cve+ports", dest="cve_ports", action="store_true")
     args = parser.parse_args()
 
     if args.ip:
-        print(f"{YELLOW}[INFO]{RESET} Target: {args.ip}")
+        info(f"Target: {args.ip}")
         process_ip(args.ip, args.cves, args.ports, args.host, args.cve_ports)
+
     elif args.file:
-        with open(args.file, "r") as file:
-            ips = file.read().splitlines()
-            print(f"{YELLOW}[INFO]{RESET} Target File: {os.path.basename(args.file)}")
-            print(f"{YELLOW}[INFO]{RESET} Total IPs: {len(ips)}")
+        with open(args.file) as f:
+            ips = f.read().splitlines()
+            info(f"Loaded file: {args.file}")
+            info(f"Total IPs: {len(ips)}")
+
             for ip in ips:
                 process_ip(ip, args.cves, args.ports, args.host, args.cve_ports)
+
     else:
         process_ip("127.0.0.1", True, True, True, True)
 
-    print(f"\n{YELLOW}[INFO]{RESET} Scan Completed")
+    info("Scan Completed")
 
 if __name__ == "__main__":
     main()
